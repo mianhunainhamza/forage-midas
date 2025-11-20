@@ -1,6 +1,7 @@
 package com.jpmc.midascore;
 
 import com.jpmc.midascore.component.DatabaseConduit;
+import com.jpmc.midascore.component.IncentivesApiClient;
 import com.jpmc.midascore.entity.TransactionRecord;
 import com.jpmc.midascore.entity.UserRecord;
 import com.jpmc.midascore.foundation.Transaction;
@@ -15,9 +16,11 @@ import java.util.Optional;
 public class TransactionListener {
     private static final Logger logger = LoggerFactory.getLogger(TransactionListener.class);
     private final DatabaseConduit databaseConduit;
+    private final IncentivesApiClient incentivesApiClient;
 
-    public TransactionListener(DatabaseConduit databaseConduit) {
+    public TransactionListener(DatabaseConduit databaseConduit, IncentivesApiClient incentivesApiClient) {
         this.databaseConduit = databaseConduit;
+        this.incentivesApiClient = incentivesApiClient;
     }
 
     @KafkaListener(topics = "${general.kafka-topic}", groupId = "midas-core")
@@ -43,25 +46,30 @@ public class TransactionListener {
             return;
         }
         
+        // Get incentive from API
+        float incentive = incentivesApiClient.getIncentive(transaction);
+        
         // Transaction is valid - update balances
+        // Deduct from sender (no incentive deducted)
         sender.setBalance(sender.getBalance() - transaction.getAmount());
-        recipient.setBalance(recipient.getBalance() + transaction.getAmount());
+        // Add to recipient (amount + incentive)
+        recipient.setBalance(recipient.getBalance() + transaction.getAmount() + incentive);
         
         // Save updated users
         databaseConduit.save(sender);
         databaseConduit.save(recipient);
         
-        // Save transaction record
-        TransactionRecord record = new TransactionRecord(sender, recipient, transaction.getAmount());
+        // Save transaction record with incentive
+        TransactionRecord record = new TransactionRecord(sender, recipient, transaction.getAmount(), incentive);
         databaseConduit.save(record);
         
-        logger.info("Transaction processed successfully: {} sent {} to {}", 
-            sender.getName(), transaction.getAmount(), recipient.getName());
-
-        // After processing each transaction, you can log all user balances
-        Optional<UserRecord> waldorf = databaseConduit.findUserByName("waldorf");
-        if (waldorf.isPresent()) {
-            logger.info("Waldorf's current balance: {}", waldorf.get().getBalance());
+        logger.info("Transaction processed: {} sent {} to {} (incentive: {})", 
+            sender.getName(), transaction.getAmount(), recipient.getName(), incentive);
+        
+        // Log Wilbur's balance for debugging
+        Optional<UserRecord> wilbur = databaseConduit.findUserByName("wilbur");
+        if (wilbur.isPresent()) {
+            logger.info("Wilbur's current balance: {}", wilbur.get().getBalance());
         }
     }
 }
